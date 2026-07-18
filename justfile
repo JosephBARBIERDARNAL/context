@@ -1,7 +1,6 @@
 # Context — local Ollama chat app (Rust core + SwiftUI)
 
 export MACOSX_DEPLOYMENT_TARGET := "26.0"
-
 app_name := "Context"
 bundle := "dist" / app_name + ".app"
 rust_lib := "core/target/release/libcontext_core.a"
@@ -87,8 +86,3 @@ clean:
     cd core && cargo clean
     cd app && swift package clean
     rm -rf dist
-
-# Delete the app's local database (chat history!)
-db-reset:
-    rm -f ~/Library/Application\ Support/Context/context.db*
-    @echo "database removed"
