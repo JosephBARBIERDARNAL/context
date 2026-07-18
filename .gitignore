@@ -1,0 +1,43 @@
+# Rust
+core/target/
+**/*.rs.bk
+
+# Swift Package Manager
+app/.build/
+.build/
+.swiftpm/
+Package.resolved
+
+# Generated UniFFI bindings (regenerate with `just bindings`)
+app/Sources/ContextCore/
+app/Sources/ContextCoreFFI/
+
+# App bundle output
+dist/
+
+# Xcode (future-proofing)
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+
+# Databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# Env / secrets
+.env
+.env.*
