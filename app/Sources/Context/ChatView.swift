@@ -36,6 +36,16 @@ struct ChatView: View {
                 proxy.scrollTo(bottomAnchor, anchor: .bottom)
             }
         }
+        .background {
+            LinearGradient(
+                colors: [
+                    Color.accentColor.opacity(0.10),
+                    Color.accentColor.opacity(0.02),
+                    Color.clear,
+                ],
+                startPoint: .top, endPoint: .bottom)
+            .ignoresSafeArea()
+        }
         .safeAreaInset(edge: .bottom) {
             ComposerView()
         }
@@ -57,14 +67,18 @@ struct ChatView: View {
 
 private struct ThinkingIndicator: View {
     var body: some View {
-        HStack(spacing: 8) {
-            ProgressView()
-                .controlSize(.small)
-            Text("Thinking…")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+        HStack {
+            HStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Thinking…")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .glassEffect(.regular, in: .capsule)
             Spacer()
         }
-        .padding(.horizontal, 4)
     }
 }

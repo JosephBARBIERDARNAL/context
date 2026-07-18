@@ -30,6 +30,7 @@ struct SidebarView: View {
                 Button("New Chat", systemImage: "square.and.pencil") {
                     state.newChat()
                 }
+                .buttonStyle(.glass)
                 .help("New Chat (⌘N)")
             }
         }
@@ -60,14 +61,15 @@ private struct ConversationRow: View {
     let conversation: Conversation
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 3) {
             Text(conversation.title)
+                .font(.system(size: 14, weight: .medium))
                 .lineLimit(1)
             Text(conversation.model)
-                .font(.caption)
+                .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 3)
     }
 }

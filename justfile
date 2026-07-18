@@ -43,11 +43,30 @@ build: bindings
 # Assemble and ad-hoc sign dist/Context.app
 bundle: build
     rm -rf {{ bundle }}
-    mkdir -p {{ bundle }}/Contents/MacOS
+    mkdir -p {{ bundle }}/Contents/MacOS {{ bundle }}/Contents/Resources
     cp app/.build/release/{{ app_name }} {{ bundle }}/Contents/MacOS/
     cp app/Info.plist {{ bundle }}/Contents/
+    cp app/AppIcon.icns {{ bundle }}/Contents/Resources/
     codesign --force --sign - {{ bundle }}
     @echo "built {{ bundle }}"
+
+# Regenerate the app icon and README logo from scripts/render-logo.swift
+icon:
+    swift scripts/render-logo.swift build/logo
+    mkdir -p build/logo/AppIcon.iconset assets
+    cp build/logo/icon_16.png   build/logo/AppIcon.iconset/icon_16x16.png
+    cp build/logo/icon_32.png   build/logo/AppIcon.iconset/icon_16x16@2x.png
+    cp build/logo/icon_32.png   build/logo/AppIcon.iconset/icon_32x32.png
+    cp build/logo/icon_64.png   build/logo/AppIcon.iconset/icon_32x32@2x.png
+    cp build/logo/icon_128.png  build/logo/AppIcon.iconset/icon_128x128.png
+    cp build/logo/icon_256.png  build/logo/AppIcon.iconset/icon_128x128@2x.png
+    cp build/logo/icon_256.png  build/logo/AppIcon.iconset/icon_256x256.png
+    cp build/logo/icon_512.png  build/logo/AppIcon.iconset/icon_256x256@2x.png
+    cp build/logo/icon_512.png  build/logo/AppIcon.iconset/icon_512x512.png
+    cp build/logo/icon_1024.png build/logo/AppIcon.iconset/icon_512x512@2x.png
+    iconutil -c icns build/logo/AppIcon.iconset -o app/AppIcon.icns
+    cp build/logo/logo.png assets/logo.png
+    cp build/logo/icon_256.png assets/icon.png
 
 # Build, bundle, and launch the app
 run: bundle

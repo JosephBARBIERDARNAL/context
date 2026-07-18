@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="Context" width="640">
+</p>
+
 # Context
 
 A 100% local macOS chat app for [Ollama](https://ollama.com) models. Rust core
@@ -5,6 +9,8 @@ A 100% local macOS chat app for [Ollama](https://ollama.com) models. Rust core
 SQLite via rusqlite) exposed to a native SwiftUI frontend through
 [UniFFI](https://mozilla.github.io/uniffi-rs/). No network access except
 `localhost:11434`.
+
+<br>
 
 ## Install
 
@@ -20,7 +26,7 @@ manually, grab `Context-arm64.zip` from the
 unzip into `/Applications`, and on first launch approve it under
 System Settings → Privacy & Security (the app is ad-hoc signed, not notarized).
 
-To build and install from source instead: `git clone`, then `just install`.
+<br>
 
 ## Requirements (building from source)
 
@@ -30,36 +36,3 @@ To build and install from source instead: `git clone`, then `just install`.
 - [just](https://github.com/casey/just)
 - Ollama running locally with at least one model pulled
 
-## Usage
-
-```sh
-just setup   # sanity-check the toolchain and that Ollama is up
-just run     # build everything and launch Context.app
-```
-
-Default model: `gemma4:26b` (falls back to the first installed model).
-
-## Development
-
-| Command | What it does |
-| --- | --- |
-| `just build` | Rust core → UniFFI bindings → Swift app |
-| `just dev` | Build and run in the foreground (logs on stdout) |
-| `just test` | Rust unit tests |
-| `just bindings` | Regenerate the Swift bindings after changing the Rust API |
-| `just fmt` / `just lint` | Format / clippy |
-| `just db-reset` | Delete the local chat database |
-
-## Architecture
-
-```
-core/   Rust: ollama-rs streaming, rusqlite store, UniFFI exports
-app/    SwiftUI: NavigationSplitView, Liquid Glass styling
-        Sources/ContextCore*  = generated bindings (gitignored)
-```
-
-- Swift calls into Rust through the UniFFI-generated `ContextCore` object
-  (linked as a static library — see `app/Package.swift`).
-- Token streaming flows Rust → Swift through the `ChatListener` foreign trait;
-  a global tokio runtime in the Rust core drives the request.
-- Chat history lives in `~/Library/Application Support/Context/context.db`.

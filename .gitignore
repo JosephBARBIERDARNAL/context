@@ -14,6 +14,7 @@ app/Sources/ContextCoreFFI/
 
 # App bundle output
 dist/
+build/
 
 # Xcode (future-proofing)
 *.xcodeproj/
