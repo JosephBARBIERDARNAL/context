@@ -6,23 +6,26 @@ A native SwiftUI macOS chat app for local AI models. It talks directly to Ollama
 
 ## Install
 
-Apple Silicon, macOS 26+, with [Ollama](https://ollama.com) running locally:
-
 ```sh
 curl -fsSL https://raw.githubusercontent.com/JosephBARBIERDARNAL/context/main/scripts/install.sh | sh
 ```
 
-This drops the latest release into `/Applications`. If you'd rather download
-manually, grab `Context-arm64.zip` from the
-[releases page](https://github.com/JosephBARBIERDARNAL/context/releases),
-unzip into `/Applications`, and on first launch approve it under
-System Settings → Privacy & Security (the app is ad-hoc signed, not notarized).
+This drops the latest release into `/Applications`. If you'd rather download manually, grab `Context-arm64.zip` from the [releases page](https://github.com/y-sunflower/context/releases), unzip into `/Applications`, and on first launch approve it under System Settings → Privacy & Security (the app is ad-hoc signed, not notarized).
 
 <br>
 
-## Requirements (building from source)
+## Ollama
 
-- macOS 26+ (Liquid Glass UI)
-- Xcode Command Line Tools (Swift 6.2+) — full Xcode not required
-- [just](https://github.com/casey/just)
-- Ollama running locally with at least one model pulled
+`context` needs [Ollama](https://ollama.com) running locally. On macOS (requires macOS 14 Sonoma or newer) and Linux, install and start the daemon with the official installer:
+
+```sh
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+Verify that the daemon is reachable:
+
+```sh
+ollama list
+```
+
+On macOS, if Ollama is installed but not running, start it with `open -a Ollama`. See [Ollama's documentation](https://docs.ollama.com/) for system requirements and troubleshooting.
