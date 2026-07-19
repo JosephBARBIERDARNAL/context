@@ -1,39 +1,39 @@
-import ContextCore
-import XCTest
+import Testing
 
 @testable import Context
 
-final class MessageSearchTests: XCTestCase {
-    func testNormalization() {
-        XCTAssertEqual(MessageSearch.normalize("  CAFÉ\nChat  "), "cafe chat")
+@Suite("Message search")
+struct MessageSearchTests {
+    @Test func normalization() {
+        #expect(MessageSearch.normalize("  CAFÉ\nChat  ") == "cafe chat")
     }
 
-    func testExactAboveFuzzy() {
+    @Test func exactMatchesRankAboveFuzzyMatches() {
         let corpus = [
             message(id: 1, content: "conversation search"),
             message(id: 2, content: "scatter every apple rapidly, crossing hills"),
         ]
         let matches = MessageSearch.matches(query: "search", in: corpus)
-        XCTAssertEqual(matches.map(\.id), [1, 2])
+        #expect(matches.map(\.id) == [1, 2])
     }
 
-    func testFuzzyPartial() {
+    @Test func fuzzyPartialMatch() {
         let matches = MessageSearch.matches(
             query: "msg srch",
             in: [message(id: 1, content: "message search")])
-        XCTAssertEqual(matches.map(\.id), [1])
+        #expect(matches.map(\.id) == [1])
     }
 
-    func testExcludesAndCaps() {
+    @Test func excludesNonmatchesAndCapsResults() {
         let corpus =
             (1...12).map { message(id: Int64($0), content: "matching text \($0)") }
             + [message(id: 20, content: "unrelated")]
         let matches = MessageSearch.matches(query: "matching", in: corpus, limit: 10)
-        XCTAssertEqual(matches.count, 10)
-        XCTAssertFalse(matches.contains(where: { $0.id == 20 }))
+        #expect(matches.count == 10)
+        #expect(!matches.contains(where: { $0.id == 20 }))
     }
 
-    func testGrouping() {
+    @Test func groupsNewestConversationsFirst() {
         let olderStrong = message(
             id: 1, conversationID: 1, title: "Older", updatedAt: 10,
             content: "search")
@@ -44,7 +44,7 @@ final class MessageSearchTests: XCTestCase {
             MessageSearchMatch(message: olderStrong, score: 100),
             MessageSearchMatch(message: newerWeak, score: 10),
         ])
-        XCTAssertEqual(groups.map(\.title), ["Newer", "Older"])
+        #expect(groups.map(\.title) == ["Newer", "Older"])
     }
 
     private func message(

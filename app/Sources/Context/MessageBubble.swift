@@ -105,8 +105,9 @@ struct MessageBubble: View {
                             Label(
                                 isThinkingExpanded ? "Hide Thinking" : "Show Thinking",
                                 systemImage: isThinkingExpanded
-                                    ? "chevron.down" : "chevron.right")
-                                .font(.system(size: 13, weight: .medium))
+                                    ? "chevron.down" : "chevron.right"
+                            )
+                            .font(.system(size: 13, weight: .medium))
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)

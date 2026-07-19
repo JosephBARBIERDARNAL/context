@@ -1,32 +1,31 @@
-import ContextCore
-import XCTest
+import Foundation
+import Testing
 
 @testable import Context
 
-final class ModelParametersTests: XCTestCase {
-    func testModelDefaultsContainNoOverrides() {
+@Suite("Model parameters")
+struct ModelParametersTests {
+    @Test func modelDefaultsContainNoOverrides() {
         let options = GenerationOptions.modelDefaults
 
-        XCTAssertEqual(options.thinking, .modelDefault)
-        XCTAssertNil(options.temperature)
-        XCTAssertNil(options.numCtx)
-        XCTAssertNil(options.numPredict)
-        XCTAssertNil(options.seed)
-        XCTAssertNil(options.stop)
-        XCTAssertNil(options.topK)
-        XCTAssertNil(options.topP)
-        XCTAssertNil(options.minP)
-        XCTAssertNil(options.repeatLastN)
-        XCTAssertNil(options.repeatPenalty)
-        XCTAssertNil(options.tfsZ)
-        XCTAssertNil(options.mirostat)
-        XCTAssertNil(options.mirostatEta)
-        XCTAssertNil(options.mirostatTau)
+        #expect(options.thinking == .modelDefault)
+        #expect(!options.hasRuntimeOverrides)
+        #expect(options.stop == nil)
     }
 
-    func testThinkingModesHaveStableLabels() {
-        XCTAssertEqual(
-            ThinkingMode.allCases.map(\.label),
-            ["Model Default", "On", "Off", "Low", "Medium", "High"])
+    @Test func thinkingModesHaveStableLabels() {
+        #expect(
+            ThinkingMode.allCases.map(\.label)
+                == ["Model Default", "On", "Off", "Low", "Medium", "High"])
+    }
+
+    @Test func optionsRoundTripThroughPreferencesJSON() throws {
+        let options = GenerationOptions(
+            thinking: .high,
+            temperature: 0.4,
+            stop: ["END"],
+            topP: 0.8)
+        let data = try JSONEncoder().encode(options)
+        #expect(try JSONDecoder().decode(GenerationOptions.self, from: data) == options)
     }
 }

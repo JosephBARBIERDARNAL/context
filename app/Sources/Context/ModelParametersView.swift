@@ -1,13 +1,6 @@
-import ContextCore
 import SwiftUI
 
-extension ThinkingMode: CaseIterable, Identifiable {
-    public static let allCases: [ThinkingMode] = [
-        .modelDefault, .on, .off, .low, .medium, .high,
-    ]
-
-    public var id: String { label }
-
+extension ThinkingMode {
     var label: String {
         switch self {
         case .modelDefault: "Model Default"

@@ -1,109 +1,5 @@
-import ContextCore
 import Foundation
 import Observation
-
-extension Conversation: Identifiable {}
-extension Message: Identifiable {}
-
-extension GenerationOptions {
-    static var modelDefaults: GenerationOptions {
-        GenerationOptions(
-            thinking: .modelDefault,
-            temperature: nil,
-            numCtx: nil,
-            numPredict: nil,
-            seed: nil,
-            stop: nil,
-            topK: nil,
-            topP: nil,
-            minP: nil,
-            repeatLastN: nil,
-            repeatPenalty: nil,
-            tfsZ: nil,
-            mirostat: nil,
-            mirostatEta: nil,
-            mirostatTau: nil)
-    }
-}
-
-private struct StoredGenerationOptions: Codable {
-    var thinking: String
-    var temperature: Double?
-    var numCtx: UInt64?
-    var numPredict: Int32?
-    var seed: Int32?
-    var stop: [String]?
-    var topK: UInt32?
-    var topP: Double?
-    var minP: Double?
-    var repeatLastN: Int32?
-    var repeatPenalty: Double?
-    var tfsZ: Double?
-    var mirostat: UInt8?
-    var mirostatEta: Double?
-    var mirostatTau: Double?
-
-    init(_ options: GenerationOptions) {
-        thinking = options.thinking.storageName
-        temperature = options.temperature
-        numCtx = options.numCtx
-        numPredict = options.numPredict
-        seed = options.seed
-        stop = options.stop
-        topK = options.topK
-        topP = options.topP
-        minP = options.minP
-        repeatLastN = options.repeatLastN
-        repeatPenalty = options.repeatPenalty
-        tfsZ = options.tfsZ
-        mirostat = options.mirostat
-        mirostatEta = options.mirostatEta
-        mirostatTau = options.mirostatTau
-    }
-
-    var options: GenerationOptions {
-        GenerationOptions(
-            thinking: ThinkingMode(storageName: thinking),
-            temperature: temperature,
-            numCtx: numCtx,
-            numPredict: numPredict,
-            seed: seed,
-            stop: stop,
-            topK: topK,
-            topP: topP,
-            minP: minP,
-            repeatLastN: repeatLastN,
-            repeatPenalty: repeatPenalty,
-            tfsZ: tfsZ,
-            mirostat: mirostat,
-            mirostatEta: mirostatEta,
-            mirostatTau: mirostatTau)
-    }
-}
-
-private extension ThinkingMode {
-    var storageName: String {
-        switch self {
-        case .modelDefault: "default"
-        case .on: "on"
-        case .off: "off"
-        case .low: "low"
-        case .medium: "medium"
-        case .high: "high"
-        }
-    }
-
-    init(storageName: String) {
-        switch storageName {
-        case "on": self = .on
-        case "off": self = .off
-        case "low": self = .low
-        case "medium": self = .medium
-        case "high": self = .high
-        default: self = .modelDefault
-        }
-    }
-}
 
 @Observable @MainActor
 final class AppState {
@@ -119,8 +15,11 @@ final class AppState {
         case ready
     }
 
-    @ObservationIgnored private var core: ContextCore?
+    @ObservationIgnored private var database: (any ChatDatabase)?
+    @ObservationIgnored private let ollama: any OllamaServing
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private var selectionTask: Task<Void, Never>?
+    @ObservationIgnored private var activeGenerationTask: Task<Void, Never>?
 
     var conversations: [Conversation] = []
     var selectedConversationID: Int64? {
@@ -128,11 +27,10 @@ final class AppState {
     }
     var messages: [Message] = []
     var isDraftChat = false
-    /// Assistant text accumulated so far for the in-flight response.
     var streamingText: String?
-    /// Reasoning accumulated separately from the visible assistant answer.
     var streamingThinkingText: String?
     var isStreaming = false
+    private(set) var activeGenerationConversationID: Int64?
     var models: [ModelInfo] = []
     var selectedModel: String
     var generationOptions = GenerationOptions.modelDefaults {
@@ -161,34 +59,51 @@ final class AppState {
         conversations.first { $0.id == selectedConversationID }
     }
 
-    init(defaults: UserDefaults = .standard) {
+    var isStreamingSelectedConversation: Bool {
+        isStreaming && activeGenerationConversationID == selectedConversationID
+    }
+
+    init(
+        defaults: UserDefaults = .standard,
+        database injectedDatabase: (any ChatDatabase)? = nil,
+        ollama: any OllamaServing = OllamaClient()
+    ) {
         self.defaults = defaults
+        self.ollama = ollama
         if let data = defaults.data(forKey: AppState.generationOptionsKey),
-            let stored = try? JSONDecoder().decode(StoredGenerationOptions.self, from: data)
+            let options = try? JSONDecoder().decode(GenerationOptions.self, from: data)
         {
-            generationOptions = stored.options
+            generationOptions = options
         }
-        let savedDefaultModel = defaults.string(forKey: AppState.defaultModelKey)
+        let savedDefaultModel =
+            defaults.string(forKey: AppState.defaultModelKey)
             ?? AppState.defaultModel
         defaultModel = savedDefaultModel
         selectedModel = savedDefaultModel
-        appearance = AppAppearance(
-            rawValue: defaults.string(forKey: AppState.appearanceKey) ?? "") ?? .system
-        do {
-            let support = try FileManager.default.url(
-                for: .applicationSupportDirectory, in: .userDomainMask,
-                appropriateFor: nil, create: true)
-            let dir = support.appendingPathComponent("Context", isDirectory: true)
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let core = try ContextCore(dbPath: dir.appendingPathComponent("context.db").path)
-            self.core = core
-            conversations = try core.listConversations()
-            selectedConversationID = conversations.first?.id
-            conversationSelectionChanged()
-        } catch {
-            errorMessage = "Failed to open the local database: \(error)"
+        appearance =
+            AppAppearance(
+                rawValue: defaults.string(forKey: AppState.appearanceKey) ?? "") ?? .system
+
+        if let injectedDatabase {
+            database = injectedDatabase
+        } else {
+            do {
+                let support = try FileManager.default.url(
+                    for: .applicationSupportDirectory,
+                    in: .userDomainMask,
+                    appropriateFor: nil,
+                    create: true)
+                let directory = support.appendingPathComponent("Context", isDirectory: true)
+                try FileManager.default.createDirectory(
+                    at: directory, withIntermediateDirectories: true)
+                database = try Database(
+                    path: directory.appendingPathComponent("context.db").path)
+            } catch {
+                errorMessage = "Failed to open the local database: \(error.localizedDescription)"
+            }
         }
-        Task { await refreshModels() }
+
+        Task { await bootstrap() }
     }
 
     // MARK: - Conversations
@@ -205,48 +120,77 @@ final class AppState {
     }
 
     func deleteConversation(_ conversation: Conversation) {
-        guard let core else { return }
-        do {
-            core.cancel(conversationId: conversation.id)
-            try core.deleteConversation(conversationId: conversation.id)
-            conversations = try core.listConversations()
-            if selectedConversationID == conversation.id {
-                selectedConversationID = conversations.first?.id
+        guard let database else { return }
+        Task {
+            if activeGenerationConversationID == conversation.id,
+                let activeGenerationTask
+            {
+                activeGenerationTask.cancel()
+                await activeGenerationTask.value
             }
-        } catch {
-            report(error)
+            do {
+                try await database.deleteConversation(id: conversation.id)
+                conversations = try await database.listConversations()
+                if selectedConversationID == conversation.id {
+                    selectedConversationID = conversations.first?.id
+                }
+            } catch {
+                report(error)
+            }
         }
     }
 
     func renameConversation(_ conversation: Conversation, to title: String) {
-        guard let core else { return }
+        guard let database else { return }
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        do {
-            try core.renameConversation(conversationId: conversation.id, title: trimmed)
-            conversations = try core.listConversations()
-        } catch {
-            report(error)
+        Task {
+            do {
+                try await database.renameConversation(id: conversation.id, title: trimmed)
+                conversations = try await database.listConversations()
+            } catch {
+                report(error)
+            }
         }
     }
 
+    private func bootstrap() async {
+        if let database {
+            do {
+                conversations = try await database.listConversations()
+                selectedConversationID = conversations.first?.id
+            } catch {
+                report(error)
+            }
+        }
+        await refreshModels()
+    }
+
     private func conversationSelectionChanged() {
+        selectionTask?.cancel()
         if editingMessageID != nil {
             editingMessageID = nil
             composerDraft = ""
         }
-        guard let core, let id = selectedConversationID else {
+        guard let database, let id = selectedConversationID else {
             messages = []
             return
         }
         isDraftChat = false
-        do {
-            messages = try core.getMessages(conversationId: id)
-            if let model = selectedConversation?.model, !model.isEmpty {
-                selectedModel = model
+        if let model = selectedConversation?.model, !model.isEmpty {
+            selectedModel = model
+        }
+        selectionTask = Task {
+            do {
+                let loaded = try await database.getMessages(conversationId: id)
+                try Task.checkCancellation()
+                guard selectedConversationID == id else { return }
+                messages = loaded
+            } catch is CancellationError {
+                return
+            } catch {
+                report(error)
             }
-        } catch {
-            report(error)
         }
     }
 
@@ -255,16 +199,18 @@ final class AppState {
     func presentMessageSearch() {
         isMessageSearchPresented = true
         messageSearchError = nil
-        guard let core else {
+        guard let database else {
             searchableMessages = []
             messageSearchError = "Chat history is unavailable."
             return
         }
-        do {
-            searchableMessages = try core.listSearchableMessages()
-        } catch {
-            searchableMessages = []
-            messageSearchError = "Couldn’t load chat history."
+        Task {
+            do {
+                searchableMessages = try await database.listSearchableMessages()
+            } catch {
+                searchableMessages = []
+                messageSearchError = "Couldn’t load chat history."
+            }
         }
     }
 
@@ -298,67 +244,136 @@ final class AppState {
     }
 
     func send(_ text: String) {
-        guard let core, !isStreaming else { return }
+        guard let database, !isStreaming else { return }
         let content = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !content.isEmpty else { return }
-        do {
-            let isNewConversation = selectedConversationID == nil
-            if selectedConversationID == nil {
-                let conversation = try core.createConversationWithMessage(
-                    model: selectedModel,
-                    content: content)
-                conversations = try core.listConversations()
-                selectedConversationID = conversation.id
+
+        let originalConversationID = selectedConversationID
+        let editingID = editingMessageID
+        let model = selectedModel
+        let options = generationOptions
+        isStreaming = true
+        streamingText = ""
+        streamingThinkingText = ""
+        activeGenerationConversationID = originalConversationID
+
+        activeGenerationTask = Task {
+            var conversationID = originalConversationID
+            var answer = ""
+            var thinking = ""
+            do {
+                if conversationID == nil {
+                    let conversation = try await database.createConversationWithMessage(
+                        model: model, content: content)
+                    conversationID = conversation.id
+                    activeGenerationConversationID = conversation.id
+                    conversations = try await database.listConversations()
+                    selectedConversationID = conversation.id
+                } else if let conversationID, let editingID {
+                    try await database.setConversationModel(id: conversationID, model: model)
+                    try await database.replaceMessageAndTruncate(
+                        conversationId: conversationID,
+                        messageId: editingID,
+                        content: content)
+                    self.editingMessageID = nil
+                } else if let conversationID {
+                    try await database.setConversationModel(id: conversationID, model: model)
+                    _ = try await database.insertMessage(
+                        conversationId: conversationID,
+                        role: "user",
+                        content: content,
+                        thinking: nil)
+                    try await database.maybeAutotitle(
+                        conversationId: conversationID, content: content)
+                }
+
+                guard let conversationID else { return }
+                activeGenerationConversationID = conversationID
+                let history = try await database.getMessages(conversationId: conversationID)
+                if selectedConversationID == conversationID {
+                    messages = history
+                }
+                conversations = try await database.listConversations()
+
+                for try await event in ollama.streamChat(
+                    model: model, history: history, options: options)
+                {
+                    switch event {
+                    case .thinking(let token):
+                        thinking += token
+                        streamingThinkingText = thinking
+                    case .content(let token):
+                        answer += token
+                        streamingText = answer
+                    }
+                }
+
+                try await completeGeneration(
+                    database: database,
+                    conversationID: conversationID,
+                    answer: answer,
+                    thinking: thinking)
+            } catch {
+                guard let conversationID else {
+                    handleGenerationError(error)
+                    return
+                }
+                if Task.isCancelled || isCancellation(error) {
+                    do {
+                        try await completeGeneration(
+                            database: database,
+                            conversationID: conversationID,
+                            answer: answer,
+                            thinking: thinking)
+                    } catch {
+                        handleGenerationError(error)
+                    }
+                } else {
+                    handleGenerationError(error)
+                }
             }
-            guard let id = selectedConversationID else { return }
-            isStreaming = true
-            streamingText = ""
-            streamingThinkingText = ""
-            let listener = StreamListener(state: self, conversationID: id)
-            if isNewConversation {
-                try core.generateReply(
-                    conversationId: id,
-                    model: selectedModel,
-                    options: generationOptions,
-                    listener: listener)
-            } else if let editingMessageID {
-                try core.resendMessage(
-                    conversationId: id,
-                    messageId: editingMessageID,
-                    content: content,
-                    model: selectedModel,
-                    options: generationOptions,
-                    listener: listener)
-                self.editingMessageID = nil
-            } else {
-                try core.sendMessage(
-                    conversationId: id,
-                    content: content,
-                    model: selectedModel,
-                    options: generationOptions,
-                    listener: listener)
-            }
-            // The user message is persisted synchronously by the core.
-            messages = try core.getMessages(conversationId: id)
-            conversations = try core.listConversations()
-        } catch {
-            isStreaming = false
-            streamingText = nil
-            streamingThinkingText = nil
-            report(error)
         }
     }
 
     func cancelStreaming() {
-        guard let core, let id = selectedConversationID else { return }
-        core.cancel(conversationId: id)
+        activeGenerationTask?.cancel()
+    }
+
+    private func completeGeneration(
+        database: any ChatDatabase,
+        conversationID: Int64,
+        answer: String,
+        thinking: String
+    ) async throws {
+        let message = try await database.insertMessage(
+            conversationId: conversationID,
+            role: "assistant",
+            content: answer,
+            thinking: thinking.isEmpty ? nil : thinking)
+        isStreaming = false
+        activeGenerationConversationID = nil
+        activeGenerationTask = nil
+        streamingText = nil
+        streamingThinkingText = nil
+        if conversationID == selectedConversationID {
+            messages.append(message)
+        }
+        conversations = try await database.listConversations()
+    }
+
+    private func handleGenerationError(_ error: Error) {
+        isStreaming = false
+        activeGenerationConversationID = nil
+        activeGenerationTask = nil
+        streamingText = nil
+        streamingThinkingText = nil
+        report(error)
     }
 
     func refreshModels() async {
-        guard let core else { return }
         ollamaStatus = .checking
         do {
-            models = try await core.listModels()
+            models = try await ollama.listModels()
             guard !models.isEmpty else {
                 ollamaStatus = .noModels
                 return
@@ -380,80 +395,18 @@ final class AppState {
         }
     }
 
-    // MARK: - Stream callbacks (hopped to MainActor by StreamListener)
-
-    func handleToken(conversationID: Int64, token: String) {
-        guard conversationID == selectedConversationID else { return }
-        streamingText = (streamingText ?? "") + token
-    }
-
-    func handleThinking(conversationID: Int64, token: String) {
-        guard conversationID == selectedConversationID else { return }
-        streamingThinkingText = (streamingThinkingText ?? "") + token
-    }
-
-    func handleComplete(conversationID: Int64, message: Message) {
-        isStreaming = false
-        streamingText = nil
-        streamingThinkingText = nil
-        if conversationID == selectedConversationID {
-            messages.append(message)
-        }
-        if let core {
-            conversations = (try? core.listConversations()) ?? conversations
-        }
-    }
-
-    func handleError(conversationID: Int64, error: String) {
-        isStreaming = false
-        streamingText = nil
-        streamingThinkingText = nil
-        errorMessage = error
-    }
-
     private func persistGenerationOptions() {
-        if let data = try? JSONEncoder().encode(StoredGenerationOptions(generationOptions)) {
+        if let data = try? JSONEncoder().encode(generationOptions) {
             defaults.set(data, forKey: AppState.generationOptionsKey)
         }
     }
 
     private func report(_ error: Error) {
-        errorMessage = String(describing: error)
+        errorMessage = error.localizedDescription
     }
 }
 
-/// Bridges UniFFI's `ChatListener` callbacks (invoked on a tokio worker
-/// thread) onto the MainActor.
-final class StreamListener: ChatListener, @unchecked Sendable {
-    private weak var state: AppState?
-    private let conversationID: Int64
-
-    init(state: AppState, conversationID: Int64) {
-        self.state = state
-        self.conversationID = conversationID
-    }
-
-    func onToken(token: String) {
-        Task { @MainActor in
-            self.state?.handleToken(conversationID: self.conversationID, token: token)
-        }
-    }
-
-    func onThinking(token: String) {
-        Task { @MainActor in
-            self.state?.handleThinking(conversationID: self.conversationID, token: token)
-        }
-    }
-
-    func onComplete(message: Message) {
-        Task { @MainActor in
-            self.state?.handleComplete(conversationID: self.conversationID, message: message)
-        }
-    }
-
-    func onError(error: String) {
-        Task { @MainActor in
-            self.state?.handleError(conversationID: self.conversationID, error: error)
-        }
-    }
+private func isCancellation(_ error: Error) -> Bool {
+    if error is CancellationError { return true }
+    return (error as? URLError)?.code == .cancelled
 }

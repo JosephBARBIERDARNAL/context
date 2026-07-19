@@ -1,16 +1,8 @@
-# Rust
-core/target/
-**/*.rs.bk
-
 # Swift Package Manager
 app/.build/
 .build/
 .swiftpm/
 Package.resolved
-
-# Generated UniFFI bindings (regenerate with `just bindings`)
-app/Sources/ContextCore/
-app/Sources/ContextCoreFFI/
 
 # App bundle output
 dist/

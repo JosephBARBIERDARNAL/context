@@ -1,8 +1,6 @@
 # context
 
-A native macOS chat app for local AI models. 
-
-It works via a rust core (chat streaming via `ollama-rs`, history in `SQLite` via `rusqlite`) exposed to a native `SwiftUI` frontend through `UniFFI`.
+A native SwiftUI macOS chat app for local AI models. It talks directly to Ollama and stores chat history locally in SQLite.
 
 <br>
 
@@ -26,7 +24,5 @@ System Settings → Privacy & Security (the app is ad-hoc signed, not notarized)
 
 - macOS 26+ (Liquid Glass UI)
 - Xcode Command Line Tools (Swift 6.2+) — full Xcode not required
-- Rust (stable)
 - [just](https://github.com/casey/just)
 - Ollama running locally with at least one model pulled
-

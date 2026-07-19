@@ -1,4 +1,3 @@
-import ContextCore
 import SwiftUI
 
 struct SidebarView: View {

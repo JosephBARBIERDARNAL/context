@@ -1,9 +1,10 @@
-# Context — local Ollama chat app (Rust core + SwiftUI)
+# Context — native SwiftUI app for local Ollama models
 
 export MACOSX_DEPLOYMENT_TARGET := "26.0"
 app_name := "Context"
 bundle := "dist" / app_name + ".app"
-rust_lib := "core/target/release/libcontext_core.a"
+testing_frameworks := "/Library/Developer/CommandLineTools/Library/Developer/Frameworks"
+testing_libraries := "/Library/Developer/CommandLineTools/Library/Developer/usr/lib"
 
 # List available recipes
 default:
@@ -11,33 +12,13 @@ default:
 
 # Check the local toolchain and that Ollama is reachable
 setup:
-    @command -v cargo >/dev/null || (echo "missing: cargo (install rustup)" && exit 1)
     @command -v swift >/dev/null || (echo "missing: swift (install Xcode CLT)" && exit 1)
     @curl -sf http://localhost:11434/api/version >/dev/null \
         || (echo "Ollama is not running — start it with: ollama serve" && exit 1)
-    @echo "ok: cargo, swift, ollama"
+    @echo "ok: swift, ollama"
 
-# Build the Rust core (release)
-core:
-    cd core && cargo build --release
-
-# Regenerate the UniFFI Swift bindings from the static library
-bindings: core
-    rm -rf app/Sources/ContextCore app/Sources/ContextCoreFFI
-    mkdir -p app/Sources/ContextCore app/Sources/ContextCoreFFI/include
-    cd core && cargo run --release --bin uniffi-bindgen-swift -- \
-        --swift-sources {{ justfile_directory() }}/{{ rust_lib }} \
-        {{ justfile_directory() }}/app/Sources/ContextCore
-    cd core && cargo run --release --bin uniffi-bindgen-swift -- \
-        --headers --modulemap --module-name context_coreFFI \
-        --modulemap-filename module.modulemap \
-        {{ justfile_directory() }}/{{ rust_lib }} \
-        {{ justfile_directory() }}/app/Sources/ContextCoreFFI/include
-    echo '// SPM requires at least one source file in a C target.' \
-        > app/Sources/ContextCoreFFI/stub.c
-
-# Build everything: Rust core -> bindings -> Swift app
-build: bindings
+# Build the Swift app
+build:
     cd app && swift build -c release
 
 # Assemble and ad-hoc sign dist/Context.app
@@ -86,22 +67,28 @@ uninstall:
 dev: bundle
     ./{{ bundle }}/Contents/MacOS/{{ app_name }}
 
-# Run the Rust tests
+# Run the Swift tests (extra paths support Command Line Tools-only installs)
 test:
-    cd core && cargo test
+    if [ "$(xcode-select -p)" = "/Library/Developer/CommandLineTools" ]; then \
+        cd app && swift test \
+            -Xswiftc -F -Xswiftc "{{ testing_frameworks }}" \
+            -Xlinker -F -Xlinker "{{ testing_frameworks }}" \
+            -Xlinker -rpath -Xlinker "{{ testing_frameworks }}" \
+            -Xlinker -rpath -Xlinker "{{ testing_libraries }}"; \
+    else \
+        cd app && swift test; \
+    fi
 
-# Format Rust (and Swift, if swift-format is available)
+# Format Swift sources and tests
 fmt:
-    cd core && cargo fmt
-    @command -v swift-format >/dev/null \
-        && swift-format -i -r app/Sources/Context || true
+    swift format format --in-place --recursive app/Sources/Context app/Tests
 
-# Lint the Rust core
+# Check Swift formatting and compiler warnings
 lint:
-    cd core && cargo clippy --all-targets -- -D warnings
+    swift format lint --strict --recursive app/Sources/Context app/Tests
+    cd app && swift build -Xswiftc -warnings-as-errors
 
 # Remove build artifacts
 clean:
-    cd core && cargo clean
     cd app && swift package clean
     rm -rf dist

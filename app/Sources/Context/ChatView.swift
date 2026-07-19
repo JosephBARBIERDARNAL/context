@@ -1,4 +1,3 @@
-import ContextCore
 import SwiftUI
 
 struct ChatView: View {
@@ -25,7 +24,7 @@ struct ChatView: View {
                         )
                         .id(message.id)
                     }
-                    if state.isStreaming {
+                    if state.isStreamingSelectedConversation {
                         let text = state.streamingText ?? ""
                         let thinking = state.streamingThinkingText ?? ""
                         if !text.isEmpty || !thinking.isEmpty {
