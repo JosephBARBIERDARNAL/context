@@ -49,6 +49,7 @@ impl Db {
                     REFERENCES conversations(id) ON DELETE CASCADE,
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
+                thinking TEXT,
                 created_at INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_messages_conversation
@@ -59,6 +60,7 @@ impl Db {
                 WHERE messages.conversation_id = conversations.id
             );",
         )?;
+        add_column_if_missing(&conn, "messages", "thinking", "TEXT")?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -191,7 +193,7 @@ impl Db {
     pub fn get_messages(&self, conversation_id: i64) -> Result<Vec<Message>, CoreError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, role, content, created_at
+            "SELECT id, conversation_id, role, content, thinking, created_at
              FROM messages WHERE conversation_id = ?1 ORDER BY id ASC",
         )?;
         let rows = stmt.query_map([conversation_id], |row| {
@@ -200,7 +202,8 @@ impl Db {
                 conversation_id: row.get(1)?,
                 role: row.get(2)?,
                 content: row.get(3)?,
-                created_at: row.get(4)?,
+                thinking: row.get(4)?,
+                created_at: row.get(5)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -235,12 +238,22 @@ impl Db {
         role: &str,
         content: &str,
     ) -> Result<Message, CoreError> {
+        self.insert_message_with_thinking(conversation_id, role, content, None)
+    }
+
+    pub fn insert_message_with_thinking(
+        &self,
+        conversation_id: i64,
+        role: &str,
+        content: &str,
+        thinking: Option<&str>,
+    ) -> Result<Message, CoreError> {
         let conn = self.conn.lock().unwrap();
         let ts = now();
         conn.execute(
-            "INSERT INTO messages (conversation_id, role, content, created_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![conversation_id, role, content, ts],
+            "INSERT INTO messages (conversation_id, role, content, thinking, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![conversation_id, role, content, thinking, ts],
         )?;
         let id = conn.last_insert_rowid();
         conn.execute(
@@ -252,6 +265,7 @@ impl Db {
             conversation_id,
             role: role.to_string(),
             content: content.to_string(),
+            thinking: thinking.map(str::to_string),
             created_at: ts,
         })
     }
@@ -278,6 +292,25 @@ impl Db {
         }
         Ok(())
     }
+}
+
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    declaration: &str,
+) -> Result<(), CoreError> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for existing in columns {
+        if existing? == column {
+            return Ok(());
+        }
+    }
+    conn.execute_batch(&format!(
+        "ALTER TABLE {table} ADD COLUMN {column} {declaration}"
+    ))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -359,10 +392,61 @@ mod tests {
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].role, "user");
         assert_eq!(msgs[1].content, "hi there");
+        assert_eq!(msgs[1].thinking, None);
 
         db.delete_conversation(c.id).unwrap();
         assert!(db.list_conversations().unwrap().is_empty());
         assert!(db.get_messages(c.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn thinking_roundtrips() {
+        let db = db();
+        let conversation = db.create_conversation("m").unwrap();
+        db.insert_message_with_thinking(
+            conversation.id,
+            "assistant",
+            "the answer",
+            Some("the reasoning"),
+        )
+        .unwrap();
+        let message = db.get_messages(conversation.id).unwrap().remove(0);
+        assert_eq!(message.content, "the answer");
+        assert_eq!(message.thinking.as_deref(), Some("the reasoning"));
+    }
+
+    #[test]
+    fn opening_a_legacy_schema_adds_new_columns() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("context-legacy-{unique}.db"));
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE conversations (
+                    id INTEGER PRIMARY KEY, title TEXT NOT NULL, model TEXT NOT NULL,
+                    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY, conversation_id INTEGER NOT NULL,
+                    role TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL
+                );",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(path.to_str().unwrap()).unwrap();
+        let conversation = db.create_conversation("m").unwrap();
+        assert_eq!(
+            db.insert_message(conversation.id, "user", "hello")
+                .unwrap()
+                .thinking,
+            None
+        );
+        drop(db);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

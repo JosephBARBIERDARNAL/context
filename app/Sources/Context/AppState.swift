@@ -5,11 +5,112 @@ import Observation
 extension Conversation: Identifiable {}
 extension Message: Identifiable {}
 
+extension GenerationOptions {
+    static var modelDefaults: GenerationOptions {
+        GenerationOptions(
+            thinking: .modelDefault,
+            temperature: nil,
+            numCtx: nil,
+            numPredict: nil,
+            seed: nil,
+            stop: nil,
+            topK: nil,
+            topP: nil,
+            minP: nil,
+            repeatLastN: nil,
+            repeatPenalty: nil,
+            tfsZ: nil,
+            mirostat: nil,
+            mirostatEta: nil,
+            mirostatTau: nil)
+    }
+}
+
+private struct StoredGenerationOptions: Codable {
+    var thinking: String
+    var temperature: Double?
+    var numCtx: UInt64?
+    var numPredict: Int32?
+    var seed: Int32?
+    var stop: [String]?
+    var topK: UInt32?
+    var topP: Double?
+    var minP: Double?
+    var repeatLastN: Int32?
+    var repeatPenalty: Double?
+    var tfsZ: Double?
+    var mirostat: UInt8?
+    var mirostatEta: Double?
+    var mirostatTau: Double?
+
+    init(_ options: GenerationOptions) {
+        thinking = options.thinking.storageName
+        temperature = options.temperature
+        numCtx = options.numCtx
+        numPredict = options.numPredict
+        seed = options.seed
+        stop = options.stop
+        topK = options.topK
+        topP = options.topP
+        minP = options.minP
+        repeatLastN = options.repeatLastN
+        repeatPenalty = options.repeatPenalty
+        tfsZ = options.tfsZ
+        mirostat = options.mirostat
+        mirostatEta = options.mirostatEta
+        mirostatTau = options.mirostatTau
+    }
+
+    var options: GenerationOptions {
+        GenerationOptions(
+            thinking: ThinkingMode(storageName: thinking),
+            temperature: temperature,
+            numCtx: numCtx,
+            numPredict: numPredict,
+            seed: seed,
+            stop: stop,
+            topK: topK,
+            topP: topP,
+            minP: minP,
+            repeatLastN: repeatLastN,
+            repeatPenalty: repeatPenalty,
+            tfsZ: tfsZ,
+            mirostat: mirostat,
+            mirostatEta: mirostatEta,
+            mirostatTau: mirostatTau)
+    }
+}
+
+private extension ThinkingMode {
+    var storageName: String {
+        switch self {
+        case .modelDefault: "default"
+        case .on: "on"
+        case .off: "off"
+        case .low: "low"
+        case .medium: "medium"
+        case .high: "high"
+        }
+    }
+
+    init(storageName: String) {
+        switch storageName {
+        case "on": self = .on
+        case "off": self = .off
+        case "low": self = .low
+        case "medium": self = .medium
+        case "high": self = .high
+        default: self = .modelDefault
+        }
+    }
+}
+
 @Observable @MainActor
 final class AppState {
     static let defaultModel = "gemma4:26b"
     private static let appearanceKey = "appearance"
     private static let defaultModelKey = "defaultModel"
+    private static let generationOptionsKey = "generationOptions"
 
     enum OllamaStatus: Equatable {
         case checking
@@ -29,9 +130,14 @@ final class AppState {
     var isDraftChat = false
     /// Assistant text accumulated so far for the in-flight response.
     var streamingText: String?
+    /// Reasoning accumulated separately from the visible assistant answer.
+    var streamingThinkingText: String?
     var isStreaming = false
     var models: [ModelInfo] = []
     var selectedModel: String
+    var generationOptions = GenerationOptions.modelDefaults {
+        didSet { persistGenerationOptions() }
+    }
     var defaultModel: String {
         didSet { defaults.set(defaultModel, forKey: AppState.defaultModelKey) }
     }
@@ -57,6 +163,11 @@ final class AppState {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        if let data = defaults.data(forKey: AppState.generationOptionsKey),
+            let stored = try? JSONDecoder().decode(StoredGenerationOptions.self, from: data)
+        {
+            generationOptions = stored.options
+        }
         let savedDefaultModel = defaults.string(forKey: AppState.defaultModelKey)
             ?? AppState.defaultModel
         defaultModel = savedDefaultModel
@@ -202,11 +313,13 @@ final class AppState {
             guard let id = selectedConversationID else { return }
             isStreaming = true
             streamingText = ""
+            streamingThinkingText = ""
             let listener = StreamListener(state: self, conversationID: id)
             if isNewConversation {
                 try core.generateReply(
                     conversationId: id,
                     model: selectedModel,
+                    options: generationOptions,
                     listener: listener)
             } else if let editingMessageID {
                 try core.resendMessage(
@@ -214,6 +327,7 @@ final class AppState {
                     messageId: editingMessageID,
                     content: content,
                     model: selectedModel,
+                    options: generationOptions,
                     listener: listener)
                 self.editingMessageID = nil
             } else {
@@ -221,6 +335,7 @@ final class AppState {
                     conversationId: id,
                     content: content,
                     model: selectedModel,
+                    options: generationOptions,
                     listener: listener)
             }
             // The user message is persisted synchronously by the core.
@@ -229,6 +344,7 @@ final class AppState {
         } catch {
             isStreaming = false
             streamingText = nil
+            streamingThinkingText = nil
             report(error)
         }
     }
@@ -271,9 +387,15 @@ final class AppState {
         streamingText = (streamingText ?? "") + token
     }
 
+    func handleThinking(conversationID: Int64, token: String) {
+        guard conversationID == selectedConversationID else { return }
+        streamingThinkingText = (streamingThinkingText ?? "") + token
+    }
+
     func handleComplete(conversationID: Int64, message: Message) {
         isStreaming = false
         streamingText = nil
+        streamingThinkingText = nil
         if conversationID == selectedConversationID {
             messages.append(message)
         }
@@ -285,7 +407,14 @@ final class AppState {
     func handleError(conversationID: Int64, error: String) {
         isStreaming = false
         streamingText = nil
+        streamingThinkingText = nil
         errorMessage = error
+    }
+
+    private func persistGenerationOptions() {
+        if let data = try? JSONEncoder().encode(StoredGenerationOptions(generationOptions)) {
+            defaults.set(data, forKey: AppState.generationOptionsKey)
+        }
     }
 
     private func report(_ error: Error) {
@@ -307,6 +436,12 @@ final class StreamListener: ChatListener, @unchecked Sendable {
     func onToken(token: String) {
         Task { @MainActor in
             self.state?.handleToken(conversationID: self.conversationID, token: token)
+        }
+    }
+
+    func onThinking(token: String) {
+        Task { @MainActor in
+            self.state?.handleThinking(conversationID: self.conversationID, token: token)
         }
     }
 

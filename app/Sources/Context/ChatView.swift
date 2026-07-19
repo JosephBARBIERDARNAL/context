@@ -17,6 +17,7 @@ struct ChatView: View {
                         MessageBubble(
                             role: message.role,
                             content: message.content,
+                            thinking: message.thinking,
                             isSearchTarget: highlightedMessageID == message.id,
                             onEdit: message.role == "user" && !state.isStreaming
                                 ? { state.edit(message) }
@@ -25,8 +26,14 @@ struct ChatView: View {
                         .id(message.id)
                     }
                     if state.isStreaming {
-                        if let text = state.streamingText, !text.isEmpty {
-                            MessageBubble(role: "assistant", content: text)
+                        let text = state.streamingText ?? ""
+                        let thinking = state.streamingThinkingText ?? ""
+                        if !text.isEmpty || !thinking.isEmpty {
+                            MessageBubble(
+                                role: "assistant",
+                                content: text,
+                                thinking: thinking.isEmpty ? nil : thinking,
+                                isStreaming: true)
                         } else {
                             ThinkingIndicator()
                         }
@@ -37,6 +44,9 @@ struct ChatView: View {
                 .padding(.top, 16)
             }
             .onChange(of: state.streamingText) {
+                proxy.scrollTo(bottomAnchor, anchor: .bottom)
+            }
+            .onChange(of: state.streamingThinkingText) {
                 proxy.scrollTo(bottomAnchor, anchor: .bottom)
             }
             .onChange(of: state.messages.count) {

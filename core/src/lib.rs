@@ -41,7 +41,38 @@ pub struct Message {
     pub conversation_id: i64,
     pub role: String,
     pub content: String,
+    pub thinking: Option<String>,
     pub created_at: i64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, uniffi::Enum)]
+pub enum ThinkingMode {
+    #[default]
+    ModelDefault,
+    On,
+    Off,
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, uniffi::Record)]
+pub struct GenerationOptions {
+    pub thinking: ThinkingMode,
+    pub temperature: Option<f64>,
+    pub num_ctx: Option<u64>,
+    pub num_predict: Option<i32>,
+    pub seed: Option<i32>,
+    pub stop: Option<Vec<String>>,
+    pub top_k: Option<u32>,
+    pub top_p: Option<f64>,
+    pub min_p: Option<f64>,
+    pub repeat_last_n: Option<i32>,
+    pub repeat_penalty: Option<f64>,
+    pub tfs_z: Option<f64>,
+    pub mirostat: Option<u8>,
+    pub mirostat_eta: Option<f64>,
+    pub mirostat_tau: Option<f64>,
 }
 
 /// A persisted message plus the conversation metadata needed by global search.
@@ -65,6 +96,7 @@ pub struct ModelInfo {
 /// Implemented on the Swift side to receive streamed chat output.
 #[uniffi::export(foreign)]
 pub trait ChatListener: Send + Sync {
+    fn on_thinking(&self, token: String);
     fn on_token(&self, token: String);
     fn on_complete(&self, message: Message);
     fn on_error(&self, error: String);
@@ -134,13 +166,14 @@ impl ContextCore {
         conversation_id: i64,
         content: String,
         model: String,
+        options: GenerationOptions,
         listener: Arc<dyn ChatListener>,
     ) -> Result<(), CoreError> {
         self.db.set_conversation_model(conversation_id, &model)?;
         self.db.insert_message(conversation_id, "user", &content)?;
         self.db.maybe_autotitle(conversation_id, &content)?;
 
-        self.generate_reply(conversation_id, model, listener)
+        self.generate_reply(conversation_id, model, options, listener)
     }
 
     /// Stream a reply using the conversation's already-persisted history.
@@ -148,10 +181,11 @@ impl ContextCore {
         self: Arc<Self>,
         conversation_id: i64,
         model: String,
+        options: GenerationOptions,
         listener: Arc<dyn ChatListener>,
     ) -> Result<(), CoreError> {
         self.db.set_conversation_model(conversation_id, &model)?;
-        self.spawn_reply(conversation_id, model, listener)
+        self.spawn_reply(conversation_id, model, options, listener)
     }
 
     /// Replace an earlier user message, remove the later history, then stream
@@ -162,13 +196,14 @@ impl ContextCore {
         message_id: i64,
         content: String,
         model: String,
+        options: GenerationOptions,
         listener: Arc<dyn ChatListener>,
     ) -> Result<(), CoreError> {
         self.db.set_conversation_model(conversation_id, &model)?;
         self.db
             .replace_message_and_truncate(conversation_id, message_id, &content)?;
 
-        self.spawn_reply(conversation_id, model, listener)
+        self.spawn_reply(conversation_id, model, options, listener)
     }
 }
 
@@ -177,6 +212,7 @@ impl ContextCore {
         self: Arc<Self>,
         conversation_id: i64,
         model: String,
+        options: GenerationOptions,
         listener: Arc<dyn ChatListener>,
     ) -> Result<(), CoreError> {
         let history = self.db.get_messages(conversation_id)?;
@@ -188,13 +224,23 @@ impl ContextCore {
 
         let this = self.clone();
         RUNTIME.spawn(async move {
-            let result = chat::stream_chat(model, history, cancel, |token| {
-                listener.on_token(token);
-            })
+            let result = chat::stream_chat(
+                model,
+                history,
+                options,
+                cancel,
+                |token| listener.on_token(token),
+                |token| listener.on_thinking(token),
+            )
             .await;
             this.cancels.lock().unwrap().remove(&conversation_id);
             match result {
-                Ok(full) => match this.db.insert_message(conversation_id, "assistant", &full) {
+                Ok(output) => match this.db.insert_message_with_thinking(
+                    conversation_id,
+                    "assistant",
+                    &output.content,
+                    (!output.thinking.is_empty()).then_some(output.thinking.as_str()),
+                ) {
                     Ok(message) => listener.on_complete(message),
                     Err(e) => listener.on_error(e.to_string()),
                 },

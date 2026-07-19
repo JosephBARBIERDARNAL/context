@@ -5,13 +5,17 @@ use std::io::Write;
 use std::sync::mpsc;
 use std::sync::Arc;
 
-use context_core::{ChatListener, ContextCore, Message};
+use context_core::{ChatListener, ContextCore, GenerationOptions, Message};
 
 struct PrintListener {
     done: mpsc::Sender<Result<Message, String>>,
 }
 
 impl ChatListener for PrintListener {
+    fn on_thinking(&self, token: String) {
+        eprint!("{token}");
+        std::io::stderr().flush().ok();
+    }
     fn on_token(&self, token: String) {
         print!("{token}");
         std::io::stdout().flush().ok();
@@ -39,7 +43,12 @@ fn main() {
     let (tx, rx) = mpsc::channel();
 
     core.clone()
-        .generate_reply(conversation.id, model, Arc::new(PrintListener { done: tx }))
+        .generate_reply(
+            conversation.id,
+            model,
+            GenerationOptions::default(),
+            Arc::new(PrintListener { done: tx }),
+        )
         .expect("send");
 
     match rx.recv_timeout(std::time::Duration::from_secs(300)) {

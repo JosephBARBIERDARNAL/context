@@ -5,12 +5,15 @@ import SwiftUI
 struct MessageBubble: View {
     let role: String
     let content: String
+    var thinking: String?
+    var isStreaming = false
     var isSearchTarget = false
     var onEdit: (() -> Void)?
 
     @State private var hovering = false
     @State private var hoveringActions = false
     @State private var copied = false
+    @State private var isThinkingExpanded = false
 
     private var isUser: Bool { role == "user" }
 
@@ -36,9 +39,11 @@ struct MessageBubble: View {
                     }
                 if !isUser { Spacer(minLength: 70) }
             }
-            actionButtons
-                .opacity(hovering || hoveringActions || copied ? 1 : 0.45)
-                .onHover { hoveringActions = $0 }
+            if onEdit != nil || !content.isEmpty {
+                actionButtons
+                    .opacity(hovering || hoveringActions || copied ? 1 : 0.45)
+                    .onHover { hoveringActions = $0 }
+            }
         }
         .onHover { hovering = $0 }
         .animation(.easeInOut(duration: 0.15), value: hovering)
@@ -84,10 +89,50 @@ struct MessageBubble: View {
             Text(content)
                 .textSelection(.enabled)
         } else {
-            Markdown(content)
-                .markdownTheme(.gitHub)
-                .textSelection(.enabled)
+            let reasoning = thinking ?? ""
+            let hasReasoning = !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let isActivelyThinking = isStreaming && content.isEmpty && hasReasoning
+            VStack(alignment: .leading, spacing: 10) {
+                if hasReasoning {
+                    if isActivelyThinking {
+                        reasoningText(reasoning)
+                    } else {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                isThinkingExpanded.toggle()
+                            }
+                        } label: {
+                            Label(
+                                isThinkingExpanded ? "Hide Thinking" : "Show Thinking",
+                                systemImage: isThinkingExpanded
+                                    ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+
+                        if isThinkingExpanded {
+                            reasoningText(reasoning)
+                                .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
+                    }
+                }
+                if !content.isEmpty {
+                    Markdown(content)
+                        .markdownTheme(.gitHub)
+                        .textSelection(.enabled)
+                }
+            }
         }
+    }
+
+    private func reasoningText(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 15))
+            .italic()
+            .foregroundStyle(.secondary)
+            .lineSpacing(2)
+            .textSelection(.enabled)
     }
 
     private func copy() {
