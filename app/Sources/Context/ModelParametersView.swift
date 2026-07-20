@@ -26,9 +26,9 @@ struct ModelParametersView: View {
                     subtitle: "Global overrides applied to every new response.")
                 Spacer(minLength: 0)
                 Button("Reset All") {
-                    state.generationOptions = .modelDefaults
+                    state.generationOptions = .appDefaults
                 }
-                .disabled(state.generationOptions == .modelDefaults)
+                .disabled(state.generationOptions == .appDefaults)
                 .buttonStyle(.bordered)
                 .padding(.trailing, 20)
             }

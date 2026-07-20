@@ -5,6 +5,7 @@ set -eu
 
 REPO="JosephBARBIERDARNAL/context"
 ASSET="Context-arm64.zip"
+CHECKSUM="$ASSET.sha256"
 DEST="/Applications/Context.app"
 
 if [ "$(uname -s)" != "Darwin" ]; then
@@ -28,13 +29,20 @@ if ! curl -fsSL -o "$tmp/$ASSET" \
     echo "  https://github.com/$REPO/releases" >&2
     exit 1
 fi
+if ! curl -fsSL -o "$tmp/$CHECKSUM" \
+    "https://github.com/$REPO/releases/latest/download/$CHECKSUM"; then
+    echo "error: could not download the release checksum." >&2
+    exit 1
+fi
+
+echo "Verifying the release archive…"
+(cd "$tmp" && shasum -a 256 -c "$CHECKSUM")
 
 ditto -x -k "$tmp/$ASSET" "$tmp/extracted"
 [ -d "$tmp/extracted/Context.app" ] || { echo "error: unexpected archive layout" >&2; exit 1; }
+codesign --verify --deep --strict "$tmp/extracted/Context.app"
 
 rm -rf "$DEST"
 ditto "$tmp/extracted/Context.app" "$DEST"
-# The app is ad-hoc signed (not notarized); make sure Gatekeeper won't object.
-xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
 
 echo "Installed $DEST"

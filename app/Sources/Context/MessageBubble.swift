@@ -26,8 +26,10 @@ struct MessageBubble: View {
                     .lineSpacing(4)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 11)
-                    .glassEffect(
-                        isUser ? .regular.tint(.accentColor.opacity(0.5)) : .regular,
+                    .background(
+                        isUser
+                            ? Color.accentColor.opacity(0.22)
+                            : Color.secondary.opacity(0.08),
                         in: .rect(cornerRadius: 20, style: .continuous)
                     )
                     .overlay {
@@ -46,8 +48,6 @@ struct MessageBubble: View {
             }
         }
         .onHover { hovering = $0 }
-        .animation(.easeInOut(duration: 0.15), value: hovering)
-        .animation(.easeInOut(duration: 0.15), value: copied)
         .animation(.easeInOut(duration: 0.2), value: isSearchTarget)
     }
 
@@ -86,8 +86,7 @@ struct MessageBubble: View {
     @ViewBuilder
     private var messageContent: some View {
         if isUser {
-            Text(content)
-                .textSelection(.enabled)
+            selectablePlainText(content, size: 18)
         } else {
             let reasoning = thinking ?? ""
             let hasReasoning = !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -119,21 +118,52 @@ struct MessageBubble: View {
                     }
                 }
                 if !content.isEmpty {
-                    Markdown(content)
-                        .markdownTheme(.gitHub)
-                        .textSelection(.enabled)
+                    if isStreaming {
+                        selectablePlainText(content, size: 18)
+                    } else {
+                        Markdown(MarkdownContentCache.shared.content(for: content))
+                            .markdownTheme(.gitHub)
+                            .markdownImageProvider(DisabledMarkdownImageProvider())
+                            .markdownInlineImageProvider(DisabledMarkdownInlineImageProvider())
+                            .textSelection(.enabled)
+                    }
                 }
             }
         }
     }
 
+    @ViewBuilder
+    private func selectablePlainText(
+        _ text: String,
+        size: CGFloat,
+        italic: Bool = false,
+        secondary: Bool = false,
+        lineSpacing: CGFloat = 4
+    ) -> some View {
+        if text.utf8.count >= 1_024 {
+            SelectableTextView(
+                text: text,
+                size: size,
+                italic: italic,
+                secondary: secondary,
+                lineSpacing: lineSpacing)
+        } else {
+            Text(text)
+                .font(.system(size: size))
+                .italic(italic)
+                .foregroundStyle(secondary ? .secondary : .primary)
+                .lineSpacing(lineSpacing)
+                .textSelection(.enabled)
+        }
+    }
+
     private func reasoningText(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 15))
-            .italic()
-            .foregroundStyle(.secondary)
-            .lineSpacing(2)
-            .textSelection(.enabled)
+        selectablePlainText(
+            text,
+            size: 15,
+            italic: true,
+            secondary: true,
+            lineSpacing: 2)
     }
 
     private func copy() {
@@ -146,4 +176,154 @@ struct MessageBubble: View {
         }
     }
 
+}
+
+private struct SelectableTextView: NSViewRepresentable {
+    typealias NSViewType = CachedTextView
+
+    let text: String
+    let size: CGFloat
+    let italic: Bool
+    let secondary: Bool
+    let lineSpacing: CGFloat
+
+    func makeNSView(context: NSViewRepresentableContext<SelectableTextView>) -> CachedTextView {
+        let storage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(containerSize: .zero)
+        container.lineFragmentPadding = 0
+        container.widthTracksTextView = false
+        layoutManager.addTextContainer(container)
+        storage.addLayoutManager(layoutManager)
+
+        let textView = CachedTextView(frame: .zero, textContainer: container)
+        textView.drawsBackground = false
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.textContainerInset = .zero
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        update(textView)
+        return textView
+    }
+
+    func updateNSView(
+        _ textView: CachedTextView,
+        context: NSViewRepresentableContext<SelectableTextView>
+    ) {
+        update(textView)
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView textView: CachedTextView,
+        context: NSViewRepresentableContext<SelectableTextView>
+    ) -> CGSize? {
+        guard let width = proposal.width, width > 0,
+            let container = textView.textContainer,
+            let layoutManager = textView.layoutManager
+        else { return nil }
+
+        if abs(textView.measuredWidth - width) < 0.5, textView.measuredHeight > 0 {
+            return CGSize(width: width, height: textView.measuredHeight)
+        }
+
+        if abs(container.containerSize.width - width) >= 0.5 {
+            container.containerSize = NSSize(
+                width: width,
+                height: CGFloat.greatestFiniteMagnitude)
+        }
+        layoutManager.ensureLayout(for: container)
+        let height = ceil(layoutManager.usedRect(for: container).height)
+        textView.measuredWidth = width
+        textView.measuredHeight = max(height, size)
+        return CGSize(width: width, height: textView.measuredHeight)
+    }
+
+    private func update(_ textView: CachedTextView) {
+        guard textView.source != text else { return }
+
+        let baseFont = NSFont.systemFont(ofSize: size)
+        let font =
+            italic
+            ? NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
+            : baseFont
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineBreakMode = .byWordWrapping
+        paragraphStyle.lineSpacing = lineSpacing
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: secondary ? NSColor.secondaryLabelColor : NSColor.labelColor,
+            .paragraphStyle: paragraphStyle,
+        ]
+
+        textView.source = text
+        textView.measuredWidth = -1
+        textView.measuredHeight = 0
+        textView.textStorage?.setAttributedString(
+            NSAttributedString(string: text, attributes: attributes))
+        textView.invalidateIntrinsicContentSize()
+    }
+}
+
+private final class CachedTextView: NSTextView {
+    var source = ""
+    var measuredWidth: CGFloat = -1
+    var measuredHeight: CGFloat = 0
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+    }
+}
+
+struct DisabledMarkdownImageProvider: ImageProvider {
+    func makeImage(url: URL?) -> some View {
+        EmptyView()
+    }
+}
+
+struct DisabledMarkdownInlineImageProvider: InlineImageProvider {
+    func image(with url: URL, label: String) async throws -> Image {
+        throw MarkdownImageLoadingError.disabled
+    }
+}
+
+enum MarkdownImageLoadingError: Error {
+    case disabled
+}
+
+@MainActor
+private final class MarkdownContentCache {
+    static let shared = MarkdownContentCache()
+
+    private let cache = NSCache<NSString, CachedMarkdownContent>()
+
+    private init() {
+        cache.countLimit = 256
+        cache.totalCostLimit = 8 * 1_024 * 1_024
+    }
+
+    func content(for source: String) -> MarkdownContent {
+        let key = source as NSString
+        if let cached = cache.object(forKey: key) {
+            return cached.content
+        }
+
+        let parsed = MarkdownContent(source)
+        cache.setObject(
+            CachedMarkdownContent(parsed),
+            forKey: key,
+            cost: source.utf8.count)
+        return parsed
+    }
+}
+
+private final class CachedMarkdownContent: NSObject {
+    let content: MarkdownContent
+
+    init(_ content: MarkdownContent) {
+        self.content = content
+    }
 }

@@ -11,9 +11,11 @@ final class ChatTab: Identifiable {
     var composerFocusRequest = 0
     var editingMessageID: Int64?
     var pendingMessageJumpID: Int64?
-    var streamingText: String?
-    var streamingThinkingText: String?
+    var streamingSnapshot: StreamingSnapshot?
     var isStreaming = false
+
+    var streamingText: String? { streamingSnapshot?.content }
+    var streamingThinkingText: String? { streamingSnapshot?.thinking }
 
     init(
         id: UUID = UUID(),

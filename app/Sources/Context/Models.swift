@@ -63,6 +63,7 @@ struct GenerationOptions: Codable, Equatable, Sendable {
     var mirostatTau: Double?
 
     static let modelDefaults = GenerationOptions()
+    static let appDefaults = GenerationOptions(numCtx: 4096)
 
     var hasRuntimeOverrides: Bool {
         temperature != nil || numCtx != nil || numPredict != nil || seed != nil
@@ -75,4 +76,11 @@ struct GenerationOptions: Codable, Equatable, Sendable {
 enum ChatStreamEvent: Equatable, Sendable {
     case thinking(String)
     case content(String)
+}
+
+struct StreamingSnapshot: Equatable, Sendable {
+    var content = ""
+    var thinking = ""
+
+    static let empty = StreamingSnapshot()
 }

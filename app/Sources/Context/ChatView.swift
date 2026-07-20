@@ -13,20 +13,16 @@ struct ChatView: View {
             ScrollView {
                 LazyVStack(spacing: 18) {
                     ForEach(state.messages) { message in
-                        MessageBubble(
-                            role: message.role,
-                            content: message.content,
-                            thinking: message.thinking,
-                            isSearchTarget: highlightedMessageID == message.id,
-                            onEdit: message.role == "user" && !state.isStreaming
-                                ? { state.edit(message) }
-                                : nil
+                        StoredMessageRow(
+                            message: message,
+                            isSearchTarget: highlightedMessageID == message.id
                         )
                         .id(message.id)
                     }
                     if state.isStreamingSelectedConversation {
-                        let text = state.streamingText ?? ""
-                        let thinking = state.streamingThinkingText ?? ""
+                        let snapshot = state.streamingSnapshot ?? .empty
+                        let text = snapshot.content
+                        let thinking = snapshot.thinking
                         if !text.isEmpty || !thinking.isEmpty {
                             MessageBubble(
                                 role: "assistant",
@@ -42,28 +38,17 @@ struct ChatView: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
             }
-            .onChange(of: state.streamingText) {
-                proxy.scrollTo(bottomAnchor, anchor: .bottom)
-            }
-            .onChange(of: state.streamingThinkingText) {
+            .onChange(of: state.streamingSnapshot) {
                 proxy.scrollTo(bottomAnchor, anchor: .bottom)
             }
             .onChange(of: state.messages.count) {
-                if state.pendingMessageJumpID == nil {
-                    proxy.scrollTo(bottomAnchor, anchor: .bottom)
-                } else {
-                    performPendingJump(using: proxy)
-                }
+                updateScrollPosition(using: proxy)
             }
             .onChange(of: state.pendingMessageJumpID) {
                 performPendingJump(using: proxy)
             }
             .onAppear {
-                if state.pendingMessageJumpID == nil {
-                    proxy.scrollTo(bottomAnchor, anchor: .bottom)
-                } else {
-                    performPendingJump(using: proxy)
-                }
+                updateScrollPosition(using: proxy)
             }
         }
         .background {
@@ -95,6 +80,14 @@ struct ChatView: View {
         }
     }
 
+    private func updateScrollPosition(using proxy: ScrollViewProxy) {
+        if state.pendingMessageJumpID == nil {
+            proxy.scrollTo(bottomAnchor, anchor: .bottom)
+        } else {
+            performPendingJump(using: proxy)
+        }
+    }
+
     private func performPendingJump(using proxy: ScrollViewProxy) {
         guard let messageID = state.pendingMessageJumpID,
             state.messages.contains(where: { $0.id == messageID })
@@ -117,6 +110,27 @@ struct ChatView: View {
     }
 }
 
+private struct StoredMessageRow: View {
+    @Environment(AppState.self) private var state
+
+    let message: Message
+    let isSearchTarget: Bool
+
+    var body: some View {
+        MessageBubble(
+            role: message.role,
+            content: message.content,
+            thinking: message.thinking,
+            isSearchTarget: isSearchTarget,
+            onEdit: editAction)
+    }
+
+    private var editAction: (() -> Void)? {
+        guard message.role == "user", !state.isStreaming else { return nil }
+        return { state.edit(message) }
+    }
+}
+
 private struct ThinkingIndicator: View {
     var body: some View {
         HStack {
@@ -129,7 +143,7 @@ private struct ThinkingIndicator: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .glassEffect(.regular, in: .capsule)
+            .background(Color.secondary.opacity(0.08), in: .capsule)
             Spacer()
         }
     }

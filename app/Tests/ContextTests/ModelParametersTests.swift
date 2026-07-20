@@ -13,6 +13,13 @@ struct ModelParametersTests {
         #expect(options.stop == nil)
     }
 
+    @Test func appDefaultsCapTheContextSize() {
+        let options = GenerationOptions.appDefaults
+
+        #expect(options.numCtx == 4096)
+        #expect(options.hasRuntimeOverrides)
+    }
+
     @Test func thinkingModesHaveStableLabels() {
         #expect(
             ThinkingMode.allCases.map(\.label)

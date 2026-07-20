@@ -16,7 +16,7 @@ This drops the latest release into `/Applications`. If you'd rather download man
 
 ## Ollama
 
-`context` needs [Ollama](https://ollama.com) running locally. On macOS (requires macOS 14 Sonoma or newer) and Linux, install and start the daemon with the official installer:
+`context` requires macOS 26 or newer and needs [Ollama](https://ollama.com) running locally. Install and start Ollama with the official installer:
 
 ```sh
 curl -fsSL https://ollama.com/install.sh | sh

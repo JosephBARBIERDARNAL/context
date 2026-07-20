@@ -85,6 +85,7 @@ fmt:
 
 # Check Swift formatting and compiler warnings
 lint:
+    sh -n scripts/install.sh scripts/release.sh
     swift format lint --strict --recursive app/Sources/Context app/Tests
     cd app && swift build -Xswiftc -warnings-as-errors
 

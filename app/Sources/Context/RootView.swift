@@ -174,6 +174,7 @@ struct EmptyStateView: View {
             Button("New Tab") { state.newTab() }
                 .buttonStyle(.glassProminent)
                 .controlSize(.large)
+                .disabled(!state.canStartChat)
                 .keyboardShortcut(.defaultAction)
                 .padding(.top, 10)
         }

@@ -7,6 +7,8 @@ final class AppState {
     private static let appearanceKey = "appearance"
     private static let defaultModelKey = "defaultModel"
     private static let generationOptionsKey = "generationOptions"
+    private static let generationDefaultsVersionKey = "generationDefaultsVersion"
+    private static let generationDefaultsVersion = 1
 
     enum OllamaStatus: Equatable {
         case checking
@@ -26,7 +28,7 @@ final class AppState {
     var selectedTabID: UUID?
     private(set) var closedTabs: [ChatTab] = []
     var models: [ModelInfo] = []
-    var generationOptions = GenerationOptions.modelDefaults {
+    var generationOptions = GenerationOptions.appDefaults {
         didSet { persistGenerationOptions() }
     }
     var defaultModel: String {
@@ -42,7 +44,7 @@ final class AppState {
     var searchableMessages: [SearchableMessage] = []
     var messageSearchError: String?
 
-    var canStartChat: Bool { ollamaStatus == .ready }
+    var canStartChat: Bool { ollamaStatus == .ready && database != nil }
 
     var activeTab: ChatTab? {
         guard let selectedTabID else { return nil }
@@ -65,6 +67,7 @@ final class AppState {
     var messages: [Message] { activeTab?.messages ?? [] }
     var isDraftChat: Bool { activeTab != nil && activeTab?.conversationID == nil }
     var isStreaming: Bool { activeTab?.isStreaming ?? false }
+    var streamingSnapshot: StreamingSnapshot? { activeTab?.streamingSnapshot }
     var streamingText: String? { activeTab?.streamingText }
     var streamingThinkingText: String? { activeTab?.streamingThinkingText }
     var isStreamingSelectedConversation: Bool { activeTab?.isStreaming ?? false }
@@ -86,15 +89,31 @@ final class AppState {
     init(
         defaults: UserDefaults = .standard,
         database injectedDatabase: (any ChatDatabase)? = nil,
-        ollama: any OllamaServing = OllamaClient()
+        ollama: any OllamaServing = OllamaClient(),
+        databaseFactory: (() throws -> any ChatDatabase)? = nil
     ) {
         self.defaults = defaults
         self.ollama = ollama
+        var loadedOptions = GenerationOptions.appDefaults
         if let data = defaults.data(forKey: AppState.generationOptionsKey),
             let options = try? JSONDecoder().decode(GenerationOptions.self, from: data)
         {
-            generationOptions = options
+            loadedOptions = options
         }
+        if defaults.integer(forKey: AppState.generationDefaultsVersionKey)
+            < AppState.generationDefaultsVersion
+        {
+            if loadedOptions.numCtx == nil {
+                loadedOptions.numCtx = GenerationOptions.appDefaults.numCtx
+            }
+            defaults.set(
+                AppState.generationDefaultsVersion,
+                forKey: AppState.generationDefaultsVersionKey)
+            if let data = try? JSONEncoder().encode(loadedOptions) {
+                defaults.set(data, forKey: AppState.generationOptionsKey)
+            }
+        }
+        generationOptions = loadedOptions
         let savedDefaultModel =
             defaults.string(forKey: AppState.defaultModelKey)
             ?? AppState.defaultModel
@@ -107,16 +126,7 @@ final class AppState {
             database = injectedDatabase
         } else {
             do {
-                let support = try FileManager.default.url(
-                    for: .applicationSupportDirectory,
-                    in: .userDomainMask,
-                    appropriateFor: nil,
-                    create: true)
-                let directory = support.appendingPathComponent("Context", isDirectory: true)
-                try FileManager.default.createDirectory(
-                    at: directory, withIntermediateDirectories: true)
-                database = try Database(
-                    path: directory.appendingPathComponent("context.db").path)
+                database = try databaseFactory?() ?? Self.openDefaultDatabase()
             } catch {
                 errorMessage = "Failed to open the local database: \(error.localizedDescription)"
             }
@@ -125,11 +135,18 @@ final class AppState {
         Task { await bootstrap() }
     }
 
-    // MARK: - Tabs
-
-    func newChat() {
-        newTab()
+    private static func openDefaultDatabase() throws -> any ChatDatabase {
+        let support = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true)
+        let directory = support.appendingPathComponent("Context", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return try Database(path: directory.appendingPathComponent("context.db").path)
     }
+
+    // MARK: - Tabs
 
     func newTab() {
         guard canStartChat else { return }
@@ -336,10 +353,11 @@ final class AppState {
         tab.composerFocusRequest += 1
     }
 
-    func send(_ text: String) {
-        guard let database, let tab = activeTab, !tab.isStreaming else { return }
+    @discardableResult
+    func send(_ text: String) -> Bool {
+        guard let database, let tab = activeTab, !tab.isStreaming else { return false }
         let content = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !content.isEmpty else { return }
+        guard !content.isEmpty else { return false }
 
         selectionTasks.removeValue(forKey: tab.id)?.cancel()
 
@@ -348,13 +366,15 @@ final class AppState {
         let model = tab.selectedModel
         let options = generationOptions
         tab.isStreaming = true
-        tab.streamingText = ""
-        tab.streamingThinkingText = ""
+        tab.streamingSnapshot = .empty
+
+        let streamBuffer = StreamingTextBuffer { [weak tab] snapshot in
+            guard let tab, tab.isStreaming else { return }
+            tab.streamingSnapshot = snapshot
+        }
 
         generationTasks[tab.id] = Task {
             var conversationID = originalConversationID
-            var answer = ""
-            var thinking = ""
             do {
                 if conversationID == nil {
                     let conversation = try await database.createConversationWithMessage(
@@ -388,43 +408,42 @@ final class AppState {
                 for try await event in ollama.streamChat(
                     model: model, history: history, options: options)
                 {
-                    switch event {
-                    case .thinking(let token):
-                        thinking += token
-                        tab.streamingThinkingText = thinking
-                    case .content(let token):
-                        answer += token
-                        tab.streamingText = answer
-                    }
+                    streamBuffer.append(event)
                 }
 
+                streamBuffer.flush()
                 try await completeGeneration(
                     database: database,
                     tab: tab,
                     conversationID: conversationID,
-                    answer: answer,
-                    thinking: thinking)
+                    answer: streamBuffer.snapshot.content,
+                    thinking: streamBuffer.snapshot.thinking)
             } catch {
                 guard let conversationID else {
+                    streamBuffer.stop()
                     handleGenerationError(error, tab: tab)
                     return
                 }
                 if Task.isCancelled || isCancellation(error) {
                     do {
+                        streamBuffer.flush()
                         try await completeGeneration(
                             database: database,
                             tab: tab,
                             conversationID: conversationID,
-                            answer: answer,
-                            thinking: thinking)
+                            answer: streamBuffer.snapshot.content,
+                            thinking: streamBuffer.snapshot.thinking)
                     } catch {
+                        streamBuffer.stop()
                         handleGenerationError(error, tab: tab)
                     }
                 } else {
+                    streamBuffer.stop()
                     handleGenerationError(error, tab: tab)
                 }
             }
         }
+        return true
     }
 
     func cancelStreaming() {
@@ -439,25 +458,29 @@ final class AppState {
         answer: String,
         thinking: String
     ) async throws {
+        guard !answer.isEmpty || !thinking.isEmpty else {
+            resetGenerationState(for: tab)
+            return
+        }
         let message = try await database.insertMessage(
             conversationId: conversationID,
             role: "assistant",
             content: answer,
             thinking: thinking.isEmpty ? nil : thinking)
-        tab.isStreaming = false
-        tab.streamingText = nil
-        tab.streamingThinkingText = nil
+        resetGenerationState(for: tab)
         tab.messages.append(message)
-        generationTasks[tab.id] = nil
         conversations = try await database.listConversations()
     }
 
     private func handleGenerationError(_ error: Error, tab: ChatTab) {
-        tab.isStreaming = false
-        tab.streamingText = nil
-        tab.streamingThinkingText = nil
-        generationTasks[tab.id] = nil
+        resetGenerationState(for: tab)
         report(error)
+    }
+
+    private func resetGenerationState(for tab: ChatTab) {
+        tab.isStreaming = false
+        tab.streamingSnapshot = nil
+        generationTasks[tab.id] = nil
     }
 
     func refreshModels() async {

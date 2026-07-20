@@ -29,10 +29,14 @@ jobs:
         run: just bundle
 
       - name: Zip the app
-        run: ditto -c -k --keepParent dist/Context.app Context-arm64.zip
+        run: |
+          ditto -c -k --keepParent dist/Context.app Context-arm64.zip
+          shasum -a 256 Context-arm64.zip > Context-arm64.zip.sha256
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: Context-arm64.zip
+          files: |
+            Context-arm64.zip
+            Context-arm64.zip.sha256
           generate_release_notes: true
